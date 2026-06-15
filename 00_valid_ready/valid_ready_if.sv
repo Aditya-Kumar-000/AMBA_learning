@@ -1,10 +1,9 @@
+cat > valid_ready_if.sv <<'EOF'
 `timescale 1ns/1ps
 
-interface valid_ready_if #(
-    parameter int DATA_W = 32
-) (
-    input  logic clk,
-    input  logic rst_n
+interface valid_ready_if #(parameter DATA_W = 32) (
+    input logic clk,
+    input logic rst_n
 );
 
     logic              valid;
@@ -36,3 +35,4 @@ interface valid_ready_if #(
     );
 
 endinterface
+EOF

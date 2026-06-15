@@ -1,3 +1,4 @@
+cat > sink.sv <<'EOF'
 `timescale 1ns/1ps
 
 module sink (
@@ -14,9 +15,9 @@ module sink (
 
     always_ff @(posedge bus.clk) begin
         if (!bus.rst_n) begin
-            bus.ready      <= 1'b0;
             transfer_count <= 32'd0;
             stall_counter  <= 2'd0;
+            bus.ready      <= 1'b0;
         end else begin
             stall_counter <= stall_counter + 2'd1;
 
@@ -33,3 +34,4 @@ module sink (
     end
 
 endmodule
+EOF

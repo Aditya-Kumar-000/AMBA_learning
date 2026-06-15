@@ -1,11 +1,14 @@
+cat > tb_valid_ready.sv <<'EOF'
 `timescale 1ns/1ps
 
 module tb_valid_ready;
 
-    logic        clk;
-    logic        rst_n;
+    logic clk;
+    logic rst_n;
+
     logic [31:0] transfer_count;
     logic [1:0]  stall_counter;
+
     logic        dbg_valid;
     logic        dbg_ready;
     logic [31:0] dbg_data;
@@ -48,3 +51,4 @@ module tb_valid_ready;
     end
 
 endmodule
+EOF
