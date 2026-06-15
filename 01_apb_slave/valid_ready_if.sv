@@ -1,3 +1,5 @@
+
+`timescale 1ns/1ps
 interface valid_ready_if #(parameter int DATA_W = 32);
     logic valid;
     logic ready;

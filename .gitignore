@@ -1,1 +1,9 @@
 .vscode/
+
+# Verilator / simulation outputs
+obj_dir/
+*.vcd
+*.fst
+*.ghw
+*.vvp
+*.log
