@@ -75,3 +75,68 @@ If the `2'b11` case was not handled while full, the design could lose incoming d
 
 ## Internship Reflection
 Skid buffers are small but important pipeline elements. They help valid-ready channels tolerate stalls, preserve ordering, and propagate backpressure safely. This is directly relevant to AXI-style channels, interconnects, and waveform debug.
+# Day 3 — Interfaces, Modports, Packages, and Passive Monitor
+
+## Concept
+An interface groups related protocol signals into one reusable bus bundle. For a valid-ready channel, the interface contains `valid`, `ready`, and `data`.
+
+A modport defines the role/direction of a module connected to the interface. It does not create new signals; it controls how a module is allowed to access the existing interface signals.
+
+A package stores shared definitions such as parameters, typedefs, enums, and constants. In this project, `vr_pkg.sv` defines `DATA_W` and `data_t`.
+
+## RTL Built
+- `vr_pkg.sv`: shared package containing `DATA_W` and `data_t`.
+- `valid_ready_if.sv`: valid-ready interface with `source_mp`, `sink_mp`, and `monitor_mp`.
+- `source.sv`: sends incrementing data using `source_mp`.
+- `skid_buffer.sv`: uses `sink_mp` on its input bus and `source_mp` on its output bus.
+- `sink.sv`: receives data and creates periodic stalls using `sink_mp`.
+- `vr_monitor.sv`: passive monitor using `monitor_mp`.
+- `tb_interfaces.sv`: connects source → skid_buffer → sink and instantiates monitors.
+
+## Modport Direction
+For a source-to-sink valid-ready channel:
+- Source drives `valid` and `data`.
+- Sink drives `ready`.
+- Monitor reads `valid`, `ready`, and `data` only.
+
+The skid buffer uses `sink_mp` on `in_bus` because it receives data from the source. It uses `source_mp` on `out_bus` because it sends data to the sink.
+
+## Passive Monitor
+The passive monitor observes the bus without driving it. It prints:
+- `TRANSFER` when `valid && ready`
+- `STALL` when `valid && !ready`
+
+This converts raw waveform signals into transaction-level debug logs.
+
+## Waveform and Log Evidence
+The monitor printed:
+
+`[105] IN STALL data=0x00000007`
+`[105] OUT STALL data=0x00000006`
+
+Just before 105 ns, the waveform showed:
+- `in_ready=0`, `in_data=7`
+- `out_ready=0`, `out_data=6`
+
+This proves the source was holding data 7 while the skid buffer was holding/outputting data 6.
+
+The monitor then printed:
+
+`[115] IN TRANSFER data=0x00000007`
+`[115] OUT TRANSFER data=0x00000006`
+
+Just before 115 ns, the waveform showed:
+- `in_ready=1`, `in_data=7`
+- `out_ready=1`, `out_data=6`
+
+Just after 115 ns:
+- `buffer_data=7`
+- `in_data=8`
+
+This proves same-cycle pop + push: data 6 left the buffer and data 7 entered the buffer.
+
+## Important Debug Lesson
+A monitor log reports what was sampled at the clock edge. A waveform cursor exactly on the edge may show post-update values. Correct debug requires checking values just before and just after the active clock edge.
+
+## Internship Reflection
+Interfaces and modports make bus ownership explicit. Packages keep shared definitions consistent. Passive monitors turn low-level signal activity into useful transaction logs. This is directly useful for AMBA/AXI-style debug, where engineers must connect channel ownership, waveform evidence, and transaction-level behaviour.
