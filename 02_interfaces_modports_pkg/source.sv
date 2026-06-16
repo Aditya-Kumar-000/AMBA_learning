@@ -13,7 +13,7 @@ module source (
       bus.valid <= 1'b1;
 
       if (bus.valid && bus.ready) begin
-        bus.data <= bus.data + data_t'(1);
+        bus.data <= bus.data + data_t'(1); // data_t is already 32 bit vector so we dont have to manually multipl by 32
       end
     end
   end
