@@ -140,3 +140,160 @@ A monitor log reports what was sampled at the clock edge. A waveform cursor exac
 
 ## Internship Reflection
 Interfaces and modports make bus ownership explicit. Packages keep shared definitions consistent. Passive monitors turn low-level signal activity into useful transaction logs. This is directly useful for AMBA/AXI-style debug, where engineers must connect channel ownership, waveform evidence, and transaction-level behaviour.
+
+
+# Day 4 — Assertions and Debug Discipline
+
+## Concept
+Protocols are contracts. Assertions turn those contracts into executable checks.
+
+For a valid-ready channel, the source and sink must obey clear rules:
+- A transfer happens only when `valid && ready`.
+- If `valid=1` and `ready=0`, the transaction is stalled.
+- During a stall, `valid` must remain high until the transfer completes.
+- During a stall, `data` must remain stable.
+- Signals should not become X after reset.
+
+Assertions allow these protocol rules to be checked automatically during simulation.
+
+## RTL and Checker Built
+Created `03_vr_assertions/` containing:
+- `vr_pkg.sv`: shared `DATA_W` and `data_t` definitions.
+- `valid_ready_if.sv`: valid-ready interface with source, sink, and monitor modports.
+- `source.sv`: valid-ready source with optional bug injection.
+- `sink.sv`: deterministic stalling sink.
+- `vr_assertions.sv`: checker module containing SVA properties.
+- `tb_vr_assertions.sv`: testbench connecting source, sink, interface, and checker.
+- `run.sh`: runs pass and intentional bug tests.
+
+## Assertions Implemented
+### DATA stability during stall
+Rule: if `valid=1` and `ready=0`, data must not change before the transfer completes.
+
+```systemverilog
+property p_data_stable_when_stalled;
+  @(posedge vr.clk) disable iff (!vr.rst_n)
+    (vr.valid && !vr.ready) |=> $stable(vr.data);
+endproperty
+```
+
+### VALID held during stall
+Rule: if `valid=1` and `ready=0`, valid must remain high on the next cycle.
+
+```systemverilog
+property p_valid_held_when_stalled;
+  @(posedge vr.clk) disable iff (!vr.rst_n)
+    (vr.valid && !vr.ready) |=> vr.valid;
+endproperty
+```
+
+### No X on VALID/READY after reset
+Rule: after reset, valid and ready must not be unknown.
+
+```systemverilog
+property p_no_x_valid_ready_after_reset;
+  @(posedge vr.clk) disable iff (!vr.rst_n)
+    !$isunknown({vr.valid, vr.ready});
+endproperty
+```
+
+### No X on DATA when VALID is high
+Rule: when valid data is being presented, the payload must be known.
+
+```systemverilog
+property p_no_x_data_when_valid;
+  @(posedge vr.clk) disable iff (!vr.rst_n)
+    vr.valid |-> !$isunknown(vr.data);
+endproperty
+```
+
+### Transfer count increments after fire
+Rule: when `valid && ready` occurs, the source transfer count should increment on the following cycle.
+
+```systemverilog
+property p_transfer_count_increments_after_fire;
+  @(posedge vr.clk) disable iff (!vr.rst_n)
+    (vr.valid && vr.ready) |=> (transfer_count == $past(transfer_count) + 32'd1);
+endproperty
+```
+
+## Important SVA Timing Lesson
+`|->` checks an overlapping/same-cycle consequence.
+
+`|=>` checks the next-cycle consequence.
+
+For registers updated inside `always_ff` using nonblocking assignments, next-cycle checking with `|=>` is often required because the new registered value is visible after the active clock edge.
+
+The first transfer-count assertion used `|->` incorrectly and failed during the clean test. Changing it to `|=>` fixed the timing relationship.
+
+## Bug Injection Results
+### Pass test
+Command:
+
+```bash
+./run.sh pass
+```
+
+Result:
+
+```text
+PASS: simulation completed. source transfers=29 sink receives=29
+```
+
+This proves the clean RTL satisfies the checker rules for this test scenario.
+
+### Bug 1 — Drop VALID during stall
+Command:
+
+```bash
+./run.sh bug_drop_valid
+```
+
+Result:
+
+```text
+ASSERTION FAILED: valid dropped before transfer completed
+```
+
+This proves `p_valid_held_when_stalled` caught the source deasserting `valid` while `ready=0`.
+
+### Bug 2 — Change DATA during stall
+Command:
+
+```bash
+./run.sh bug_change_data
+```
+
+Result:
+
+```text
+ASSERTION FAILED: data changed while valid was stalled
+```
+
+This proves `p_data_stable_when_stalled` caught the source changing payload while the sink had not yet accepted the previous value.
+
+## Debug Method
+The professional debug loop used today was:
+
+```text
+write protocol contract
+→ run clean regression
+→ intentionally inject bug
+→ confirm assertion failure
+→ identify violated rule
+→ fix/check assertion timing
+```
+
+This is stronger than manually inspecting every waveform because the checker automatically detects protocol violations.
+
+## Internship Reflection
+Assertions are executable protocol contracts. In front-end emulation and verification work, checkers help catch invalid behaviour quickly during regressions. A good assertion failure should identify the violated rule clearly enough that an engineer can triage the issue without guessing.
+
+Today’s key vocabulary:
+- checker
+- protocol contract
+- bug injection
+- regression
+- assertion failure
+- failure triage
+- fire = `valid && ready`
