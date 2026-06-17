@@ -297,3 +297,320 @@ Today’s key vocabulary:
 - assertion failure
 - failure triage
 - fire = `valid && ready`
+
+## Day 5 — APB Transfer Timing
+
+### Goal
+
+Today I moved from generic VALID/READY handshakes into the first real AMBA protocol: **APB — Advanced Peripheral Bus**.
+
+The goal was not to build a full peripheral yet. The goal was to understand and implement the basic APB transfer rhythm:
+
+```text
+IDLE  → SETUP  → ACCESS  → IDLE
+```
+
+or more specifically:
+
+```text
+SETUP  = PSEL=1, PENABLE=0
+ACCESS = PSEL=1, PENABLE=1
+DONE   = PSEL && PENABLE && PREADY
+```
+
+APB is used for low-power, low-complexity peripheral register access. It is unpipelined, has no bursts, and every transfer takes at least two cycles: SETUP followed by ACCESS.
+
+---
+
+### Key APB Signals
+
+| Signal | Direction | Meaning |
+|---|---|---|
+| `PADDR` | requester/bridge → completer/peripheral | Address of the register being accessed |
+| `PSEL` | requester → completer | Selects the APB peripheral |
+| `PENABLE` | requester → completer | Marks the ACCESS phase |
+| `PWRITE` | requester → completer | `1` = write, `0` = read |
+| `PWDATA` | requester → completer | Write data |
+| `PRDATA` | completer → requester | Read data |
+| `PREADY` | completer → requester | Transfer complete / wait-state control |
+| `PSLVERR` | completer → requester | Error response |
+
+---
+
+### Core Timing Rule
+
+An APB transfer does **not** complete in SETUP.
+
+It completes only during ACCESS when:
+
+```systemverilog
+PSEL && PENABLE && PREADY
+```
+
+This is the APB equivalent of a VALID/READY “fire”, but APB has a required two-phase structure first:
+
+```text
+VALID/READY completion: valid && ready
+APB completion:         PSEL && PENABLE && PREADY
+```
+
+The key difference is that APB must go through:
+
+```text
+SETUP first, then ACCESS
+```
+
+---
+
+### Why SETUP Exists
+
+APB needs the SETUP phase so the peripheral can see stable request information before the actual ACCESS phase.
+
+During SETUP, the requester presents:
+
+```text
+PADDR
+PWRITE
+PWDATA, if it is a write
+PSEL=1
+PENABLE=0
+```
+
+Then in the next cycle, the requester asserts `PENABLE=1`, moving into ACCESS.
+
+This avoids jumping straight into a transfer before the peripheral has seen clean address/control information.
+
+---
+
+### Wait States
+
+A wait state happens when the transfer is in ACCESS but the completer is not ready:
+
+```text
+PSEL=1
+PENABLE=1
+PREADY=0
+```
+
+During an ACCESS wait state, the requester must keep the transfer stable.
+
+For writes:
+
+```text
+PSEL    stays high
+PENABLE stays high
+PADDR   stable
+PWRITE  stable at 1
+PWDATA  stable
+```
+
+For reads:
+
+```text
+PSEL    stays high
+PENABLE stays high
+PADDR   stable
+PWRITE  stable at 0
+```
+
+The transfer only completes once `PREADY=1`.
+
+---
+
+### What I Built
+
+Created folder:
+
+```text
+04_apb_timing/
+```
+
+Files created:
+
+```text
+apb_pkg.sv
+apb_if.sv
+apb_slave_empty.sv
+tb_apb_basic.sv
+run.sh
+README.md
+```
+
+The design contains:
+
+1. `apb_pkg.sv`
+   - Defines `ADDR_W`
+   - Defines `DATA_W`
+   - Defines `addr_t`
+   - Defines `data_t`
+
+2. `apb_if.sv`
+   - Bundles APB signals into an interface
+   - Adds requester, completer, and monitor modports
+
+3. `apb_slave_empty.sv`
+   - Simple APB completer/peripheral stub
+   - Always drives `PREADY=1`
+   - Always drives `PSLVERR=0`
+   - Returns fixed read data: `32'hDEAD_BEEF`
+   - Detects completed transfers using:
+
+```systemverilog
+transfer_complete = apb.PSEL && apb.PENABLE && apb.PREADY;
+```
+
+4. `tb_apb_basic.sv`
+   - Generates clock/reset
+   - Implements `apb_write`
+   - Implements `apb_read`
+   - Performs one APB write and one APB read
+   - Dumps `wave.vcd`
+
+---
+
+### APB Write Task Behaviour
+
+The write task follows this sequence:
+
+```text
+1. SETUP:
+   PSEL=1
+   PENABLE=0
+   PADDR=addr
+   PWRITE=1
+   PWDATA=data
+
+2. Wait one clock edge
+
+3. ACCESS:
+   PENABLE=1
+
+4. Wait until PREADY=1
+
+5. Return to IDLE:
+   PSEL=0
+   PENABLE=0
+```
+
+The write completed successfully when the slave printed:
+
+```text
+APB WRITE addr=0x00000010 data=0xcafe1234
+```
+
+---
+
+### APB Read Task Behaviour
+
+The read task follows this sequence:
+
+```text
+1. SETUP:
+   PSEL=1
+   PENABLE=0
+   PADDR=addr
+   PWRITE=0
+
+2. Wait one clock edge
+
+3. ACCESS:
+   PENABLE=1
+
+4. Wait until PREADY=1
+
+5. Capture PRDATA
+
+6. Return to IDLE:
+   PSEL=0
+   PENABLE=0
+```
+
+The read completed successfully and returned:
+
+```text
+0xDEAD_BEEF
+```
+
+This happened because the simple APB slave drives:
+
+```systemverilog
+assign apb.PRDATA = data_t'(32'hDEAD_BEEF);
+```
+
+---
+
+### Terminal Evidence
+
+The simulation showed the expected APB sequence:
+
+```text
+APB WRITE REQUEST addr=0x00000010 data=0xcafe1234
+APB WRITE addr=0x00000010 data=0xcafe1234
+APB READ addr=0x00000010 data=0xdeadbeef
+Read task returned data=0xdeadbeef
+```
+
+This proves:
+
+```text
+The requester created valid APB write/read transfers.
+The completer detected ACCESS_DONE using PSEL && PENABLE && PREADY.
+The read path returned fixed PRDATA correctly.
+```
+
+---
+
+### Important Lessons
+
+1. APB is not just VALID/READY with renamed signals.
+2. APB has a mandatory two-phase transfer structure: SETUP then ACCESS.
+3. A transfer completes only when:
+
+```systemverilog
+PSEL && PENABLE && PREADY
+```
+
+4. `PREADY=0` creates wait states.
+5. During wait states, address/control/write data must remain stable.
+6. `PREADY=1` in my current slave means every transfer completes immediately in the ACCESS cycle.
+7. Day 5 did not build real registers yet; it only proved APB transfer timing.
+8. Day 6 will build a real memory-mapped APB register block.
+
+---
+
+### Internship Reflection
+
+This is the first real AMBA protocol block in the prep plan.
+
+The most important engineering takeaway is:
+
+```text
+APB is a simple, unpipelined peripheral bus where the requester presents address/control in SETUP, performs the transfer in ACCESS, and waits for the completer to assert PREADY.
+```
+
+If debugging an APB issue in a real design, I should first ask:
+
+```text
+Did the transfer go through SETUP?
+Did PENABLE assert only in ACCESS?
+Did PREADY complete the transfer?
+Were PADDR/PWRITE/PWDATA stable during wait states?
+Did the completer respond with PRDATA/PSLVERR at the correct time?
+```
+
+---
+
+### Commit
+
+Committed and pushed:
+
+```text
+1c36cb9 Day 04: APB transfer timing, successfully created system for Both read and write
+```
+
+Note: this commit message says Day 04, but the content is actually Day 5 APB transfer timing. Future commits should use lowercase, cleaner messages such as:
+
+```text
+day06: implement apb register block
+day07: add apb checker and wait-state tests
+```
