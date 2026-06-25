@@ -614,3 +614,35 @@ Note: this commit message says Day 04, but the content is actually Day 5 APB tra
 day06: implement apb register block
 day07: add apb checker and wait-state tests
 ```
+
+Day 8 — AXI-Lite five channels
+
+AXI-Lite has five independent VALID/READY channels.
+
+Master to slave:
+AW = write address
+W  = write data
+AR = read address
+
+Slave to master:
+B = write response
+R = read data/response
+
+A channel transfers only when VALID && READY are both high at the rising clock edge.
+
+Write path:
+AW handshake accepts address.
+W handshake accepts data/strobes.
+B handshake completes the write transaction.
+
+Read path:
+AR handshake accepts read address.
+R handshake completes the read transaction.
+
+AW and W are independent. Legal write orders:
+1. AW then W then B
+2. W then AW then B
+3. AW and W same cycle, then B
+
+During stall, VALID and payload must stay stable:
+VALID=1, READY=0 → no handshake, hold payload.
